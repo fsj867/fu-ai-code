@@ -1,0 +1,52 @@
+spring:
+  profiles:
+    active: local
+  application:
+    name: fu-ai-code-backend
+  session:
+    store-type: redis
+    timeout: 2592000
+  datasource:
+    url: jdbc:mysql://localhost:3306/fu_ai_code?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false
+    username: your_username
+    password: your_password
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      minimum-idle: 5
+      maximum-pool-size: 20
+      idle-timeout: 30000
+      connection-timeout: 30000
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      password: your_redis_password
+      timeout: 10000ms
+      database: 0
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 2
+          max-wait: -1ms
+server:
+  port: 8124
+  servlet:
+    context-path: /api
+    session:
+      cookie:
+        max-age: 2592000
+
+mybatis:
+  mapper-locations: classpath:mapper/*.xml
+  type-aliases-package: com.fu.fuaicode.entity
+
+springdoc:
+  group-configs:
+    - group: 'default'
+      packages-to-scan: com.fu.fuaicode.controller
+
+knife4j:
+  enable: true
+  setting:
+    language: zh_cn
