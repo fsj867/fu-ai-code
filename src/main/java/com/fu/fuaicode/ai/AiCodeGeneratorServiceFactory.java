@@ -37,6 +37,8 @@ public class AiCodeGeneratorServiceFactory {
     @Resource
     private StreamingChatModel reasoningStreamingChatModel;
     @Resource
+    private ChatModel toolChatModel;
+    @Resource
     private RedisChatMemoryStore redisChatMemoryStore;
     @Resource
     private ChatHistoryService chatHistoryService;
@@ -65,8 +67,8 @@ public class AiCodeGeneratorServiceFactory {
                     .build();
             //VUE工程模式
             case VUE_PROJECT -> AiServices.builder(AiCodeGeneratorService.class)
+                    .chatModel(toolChatModel)
                     .streamingChatModel(reasoningStreamingChatModel)
-                    .chatModel(dashScopeChatModel)
                     .chatMemoryProvider(memoryId -> messageWindowChatMemory) //为memoryId绑定会话记忆
                     .tools(new FileWriteTool())
                     .inputGuardrails(new PromptSafetyInputGuardrail()) // 输入安全防护

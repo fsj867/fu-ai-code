@@ -357,10 +357,10 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         // vue 项目特殊处理
         if(codeGenType.equals("vue_project")){
             File distDir = new File(sourceDir, "dist");
-            if (!distDir.exists() && !distDir.isDirectory()) {
-                throw new BusinessException(ErrorCode.SYSTEM_ERROR,"dist目录不存在");
+            if (!distDir.exists() || !distDir.isDirectory()) {
+                throw new BusinessException(ErrorCode.SYSTEM_ERROR,"dist目录不存在，请先等待构建完成或重新生成代码");
             }
-            sourceDir = distDir; // vue 项目特殊处理
+            sourceDir = distDir;
             log.info("vue项目构建成功，将部署dist目录：{}", distDir.getAbsolutePath());
         }
         //获得部署目录
