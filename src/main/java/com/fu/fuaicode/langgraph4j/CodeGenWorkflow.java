@@ -2,15 +2,25 @@ package com.fu.fuaicode.langgraph4j;
 
 import com.fu.fuaicode.exception.BusinessException;
 import com.fu.fuaicode.exception.ErrorCode;
+import com.fu.fuaicode.exception.ThrowUtils;
 import com.fu.fuaicode.langgraph4j.node.*;
 import com.fu.fuaicode.langgraph4j.state.WorkflowContext;
+import com.fu.fuaicode.langgraph4j.state.WorkflowEvent;
 import com.fu.fuaicode.model.QualityResult;
+import com.fu.fuaicode.model.entity.App;
+import com.fu.fuaicode.model.entity.User;
 import com.fu.fuaicode.model.enums.CodeGenTypeEnum;
+import com.fu.fuaicode.service.AppService;
+import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
+
 import org.bsc.langgraph4j.*;
 import org.bsc.langgraph4j.prebuilt.MessagesState;
 import org.bsc.langgraph4j.prebuilt.MessagesStateGraph;
+import org.springframework.stereotype.Component;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.util.HashMap;
 import java.util.Map;
 
 import static org.bsc.langgraph4j.StateGraph.START;
@@ -18,7 +28,11 @@ import static org.bsc.langgraph4j.StateGraph.END;
 import static org.bsc.langgraph4j.action.AsyncEdgeAction.edge_async;
 
 @Slf4j
+@Component
 public class CodeGenWorkflow {
+
+    @Resource
+    private AppService appService;
 
     // 创建编译图
     public CompiledGraph<MessagesState<String>> createGraph(){
@@ -28,6 +42,7 @@ public class CodeGenWorkflow {
                     .addNode("image_collector",ImageCollectorNode.create())
                     .addNode("project_builder", ProjectBuilderNode.create())
                     .addNode("code_generator", CodeGeneratorNode.create())
+                    .addNode("code_quality_check", CodeQualityCheckNode.create())
                     .addNode("router", RouterNode.create())
                     .addNode("prompt_enhancer", PromptEnhancerNode.create())
                     // edges
@@ -35,11 +50,12 @@ public class CodeGenWorkflow {
                     .addEdge("image_collector", "prompt_enhancer")
                     .addEdge("prompt_enhancer", "router")
                     .addEdge("router", "code_generator")
-                    .addConditionalEdges("code_generator",
-                            edge_async(this::routeBuildOrSkip),
-                            Map.of("build", "project_builder", //质检通过，需要构建
-                                    "skip_build", END, //质检通过，不需要构建
-                                    "fail", "code_generator" //质检不通过，重新生成代码
+                    .addEdge("code_generator", "code_quality_check")
+                    .addConditionalEdges("code_quality_check",
+                            edge_async(this::routeAfterQualityCheck),
+                            Map.of("build", "project_builder",
+                                    "skip_build", END,
+                                    "fail", "code_generator"
                             ))
                     .addEdge("project_builder", END)
                     // compile
@@ -50,7 +66,7 @@ public class CodeGenWorkflow {
             throw new BusinessException(ErrorCode.SYSTEM_ERROR, "创建编译图失败: " + e.getMessage());
         }
     }
-    // 执行图
+    // 执行图 
     public WorkflowContext execute(String prompt) {
         CompiledGraph<MessagesState<String>> graph = createGraph();
         // 初始状态
@@ -76,6 +92,119 @@ public class CodeGenWorkflow {
         log.info("最终状态: {}", finalState);
         return finalState;
     }
+    private static final Map<String, String> STEP_NAME_MAP = Map.of(
+            "image_collector", "图片收集",
+            "prompt_enhancer", "提示词优化",
+            "router", "智能路由",
+            "code_generator", "代码生成",
+            "code_quality_check", "代码质检",
+            "project_builder", "项目构建"
+    );
+
+    // 执行图，流式输出（SseEmitter 方式，Spring MVC 原生支持，最稳定）
+    public SseEmitter executeSse(String prompt, Long appId, User loginUser) {
+        App app = appService.getById(appId);
+        ThrowUtils.throwIf(app == null, ErrorCode.PARAMS_ERROR, "应用不存在");
+        ThrowUtils.throwIf(loginUser == null, ErrorCode.PARAMS_ERROR, "用户不存在");
+        ThrowUtils.throwIf(!app.getUserId().equals(loginUser.getId()), ErrorCode.NO_AUTH_ERROR, "用户没有权限访问应用");
+
+        CodeGenTypeEnum appGenType = CodeGenTypeEnum.getByValue(app.getCodeGenType());
+        ThrowUtils.throwIf(appGenType == null, ErrorCode.PARAMS_ERROR, "应用代码生成类型无效");
+
+        CompiledGraph<MessagesState<String>> graph = createGraph();
+
+        WorkflowContext inintialState = WorkflowContext.builder()
+                .currentStep("初始化")
+                .originalPrompt(prompt)
+                .appId(appId)
+                .generationType(appGenType)
+                .build();
+        GraphRepresentation graphRepresentation = graph.getGraph(GraphRepresentation.Type.MERMAID);
+        log.info("图结构：{}", graphRepresentation.content());
+
+        SseEmitter emitter = new SseEmitter(0L); // 0 = 永不超时
+
+        Thread.startVirtualThread(() -> {
+            try {
+                WorkflowContext.setEventSinkHolder(new SseEmitterAdapter(emitter));
+                int currentStep = 1;
+                int eventCount = 0;
+                for (NodeOutput<MessagesState<String>> step : graph.stream(
+                        Map.of(WorkflowContext.WORKFLOW_CONTEXT_KEY, inintialState))) {
+                    String nodeName = step.node();
+                    if (nodeName.startsWith("__") && nodeName.endsWith("__")) {
+                        continue;
+                    }
+                    log.info("第 {} 步: {}", currentStep, nodeName);
+                    String displayStepName = STEP_NAME_MAP.getOrDefault(nodeName, nodeName);
+                    WorkflowEvent event = new WorkflowEvent();
+                    event.setEventType(WorkflowEvent.TYPE_STEP);
+                    event.setStepName(displayStepName);
+                    sendSseEvent(emitter, event);
+                    eventCount++;
+                    log.info("发射 step 事件[{}]: {}", eventCount, displayStepName);
+                    currentStep++;
+                }
+                log.info("工作流执行完成，发射完成事件");
+                WorkflowEvent completeEvent = new WorkflowEvent();
+                completeEvent.setEventType(WorkflowEvent.TYPE_COMPLETE);
+                sendSseEvent(emitter, completeEvent);
+                emitter.complete();
+                log.info("事件流发射完毕，共发射 {} 个 step 事件", eventCount);
+            } catch (Exception e) {
+                log.error("工作流执行异常", e);
+                WorkflowEvent errorEvent = new WorkflowEvent();
+                errorEvent.setEventType(WorkflowEvent.TYPE_ERROR);
+                errorEvent.setContent(e.getMessage() != null ? e.getMessage() : "工作流执行异常");
+                try {
+                    sendSseEvent(emitter, errorEvent);
+                    emitter.complete();
+                } catch (Exception ex) {
+                    log.warn("发送错误事件失败", ex);
+                }
+            } finally {
+                WorkflowContext.clearEventSinkHolder();
+            }
+        });
+
+        return emitter;
+    }
+
+    private void sendSseEvent(SseEmitter emitter, WorkflowEvent event) {
+        try {
+            Map<String, String> data = new HashMap<>();
+            data.put("data", cn.hutool.json.JSONUtil.toJsonStr(event));
+            String jsonStr = cn.hutool.json.JSONUtil.toJsonStr(data);
+            emitter.send(SseEmitter.event().data(jsonStr));
+        } catch (Exception e) {
+            log.warn("发送 SSE 事件失败", e);
+        }
+    }
+
+    /**
+     * SseEmitter 适配器，供 CodeGeneratorNode 等节点发射 token 事件
+     */
+    public static class SseEmitterAdapter {
+        private final SseEmitter emitter;
+
+        public SseEmitterAdapter(SseEmitter emitter) {
+            this.emitter = emitter;
+        }
+
+        public void tryEmitNext(WorkflowEvent event) {
+            if (emitter != null) {
+                try {
+                    Map<String, String> data = new HashMap<>();
+                    data.put("data", cn.hutool.json.JSONUtil.toJsonStr(event));
+                    String jsonStr = cn.hutool.json.JSONUtil.toJsonStr(data);
+                    emitter.send(SseEmitter.event().data(jsonStr));
+                } catch (Exception e) {
+                    // 静默忽略发送错误
+                }
+            }
+        }
+    }
+
     private String routeBuildOrSkip(MessagesState<String> state) {
         WorkflowContext context = WorkflowContext.getContext(state);
         CodeGenTypeEnum generationType = context.getGenerationType();
@@ -90,9 +219,15 @@ public class CodeGenWorkflow {
     private String routeAfterQualityCheck(MessagesState<String> state) {
         WorkflowContext context = WorkflowContext.getContext(state);
         QualityResult qualityResult = context.getQualityResult();
-        // 如果质检失败，重新生成代码
+        // 如果质检失败，检查重试次数
         if (qualityResult == null || !qualityResult.getIsValid()) {
-            log.error("代码质检失败，需要重新生成代码");
+            int retryCount = context.getRetryCount() != null ? context.getRetryCount() : 0;
+            if (retryCount >= WorkflowContext.MAX_RETRY_COUNT) {
+                log.warn("代码质检已达最大重试次数 ({})，不再重试，继续后续流程", WorkflowContext.MAX_RETRY_COUNT);
+                return routeBuildOrSkip(state);
+            }
+            log.error("代码质检失败，第 {} 次重试生成代码", retryCount + 1);
+            context.setRetryCount(retryCount + 1);
             return "fail";
         }
         // 质检通过，使用原有的构建路由逻辑

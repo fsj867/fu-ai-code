@@ -1,9 +1,11 @@
 package com.fu.fuaicode.langgraph4j.node;
 
+import cn.hutool.core.io.FileUtil;
 import com.fu.fuaicode.constant.AppConstant;
 import com.fu.fuaicode.core.AiCodeGeneratorFacade;
 import com.fu.fuaicode.langgraph4j.SpringContextUtil;
 import com.fu.fuaicode.langgraph4j.state.WorkflowContext;
+import com.fu.fuaicode.langgraph4j.state.WorkflowEvent;
 import com.fu.fuaicode.model.QualityResult;
 import com.fu.fuaicode.model.enums.CodeGenTypeEnum;
 import lombok.extern.slf4j.Slf4j;
@@ -11,6 +13,7 @@ import org.bsc.langgraph4j.action.AsyncNodeAction;
 import org.bsc.langgraph4j.prebuilt.MessagesState;
 import reactor.core.publisher.Flux;
 
+import java.io.File;
 import java.time.Duration;
 
 import static org.bsc.langgraph4j.action.AsyncNodeAction.node_async;
@@ -18,28 +21,68 @@ import static org.bsc.langgraph4j.action.AsyncNodeAction.node_async;
 @Slf4j
 public class CodeGeneratorNode {
 
+    /**
+     * 统一发射事件，支持 Sinks.Many 和 FluxSink 适配器
+     */
+    private static void emitEvent(Object sink, WorkflowEvent event) {
+        if (sink == null) {
+            return;
+        }
+        try {
+            if (sink instanceof reactor.core.publisher.Sinks.Many) {
+                ((reactor.core.publisher.Sinks.Many<WorkflowEvent>) sink).tryEmitNext(event);
+            } else {
+                // 尝试调用 tryEmitNext 方法（适配器模式）
+                java.lang.reflect.Method method = sink.getClass().getMethod("tryEmitNext", WorkflowEvent.class);
+                method.invoke(sink, event);
+            }
+        } catch (Exception e) {
+            log.warn("发射事件失败", e);
+        }
+    }
+
     public static AsyncNodeAction<MessagesState<String>> create() {
         return node_async(state -> {
             WorkflowContext context = WorkflowContext.getContext(state);
             log.info("执行节点: 代码生成");
-
-            // 使用增强提示词作为发给 AI 的用户消息
+            // 构造用户消息，如果存在质检失败结果则添加错误修复信息
             String userMessage = buildUserMessage(context);
             CodeGenTypeEnum generationType = context.getGenerationType();
-            // 获取 AI 代码生成外观服务
             AiCodeGeneratorFacade codeGeneratorFacade = SpringContextUtil.getBean(AiCodeGeneratorFacade.class);
             log.info("开始生成代码，类型: {} ({})", generationType.getValue(), generationType.getValue());
-            // 先使用固定的 appId (后续再整合到业务中)
-            Long appId = 0L;
-            // 调用流式代码生成
-            Flux<String> codeStream = codeGeneratorFacade.generateAndSaveCodeStream(userMessage, generationType, appId);
-            // 同步等待流式输出完成
-            codeStream.blockLast(Duration.ofMinutes(10)); // 最多等待 10 分钟
-            // 根据类型设置生成目录
+            Long appId = context.getAppId() != null ? context.getAppId() : 0L;
             String generatedCodeDir = String.format("%s/%s_%s", AppConstant.CODE_OUTPUT_ROOT_DIR, generationType.getValue(), appId);
-            log.info("AI 代码生成完成，生成目录: {}", generatedCodeDir);
 
-            // 更新状态
+            // 如果是重试（已有质检失败结果），清理旧的 dist 目录，避免构建节点跳过
+            QualityResult qualityResult = context.getQualityResult();
+            if (isQualityCheckFailed(qualityResult)) {
+                File distDir = new File(generatedCodeDir, "dist");
+                if (distDir.exists() && distDir.isDirectory()) {
+                    log.info("检测到重试，清理旧的 dist 目录: {}", distDir.getAbsolutePath());
+                    FileUtil.del(distDir);
+                }
+            }
+
+            Flux<String> codeStream = codeGeneratorFacade.generateAndSaveCodeStream(userMessage, generationType, appId);
+            // 监听代码生成流，将 token 发送至事件流（优先从 ThreadLocal 获取，避免状态序列化丢失引用）
+            Object eventSinkObj = WorkflowContext.getEventSinkHolder();
+            if (eventSinkObj == null) {
+                eventSinkObj = context.getEventSink();
+            }
+            if (eventSinkObj != null) {
+                final Object finalSinkObj = eventSinkObj;
+                codeStream = codeStream.doOnNext(chunk -> {
+                    WorkflowEvent event = new WorkflowEvent();
+                    event.setEventType(WorkflowEvent.TYPE_TOKEN);
+                    event.setStepName("code_generator");
+                    event.setContent(chunk);
+                    emitEvent(finalSinkObj, event);
+                });
+            }
+            // 同步等待流式输出完成
+            codeStream.blockLast(Duration.ofMinutes(10));
+            log.info("AI 代码生成完成，生成目录: {}", generatedCodeDir);
+            // 设置当前步骤为代码生成
             context.setCurrentStep("代码生成");
             context.setGeneratedCodeDir(generatedCodeDir);
             return WorkflowContext.saveContext(context);

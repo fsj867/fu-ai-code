@@ -35,6 +35,13 @@
           <span>AI 代码生成助手</span>
         </div>
         <div class="chat-header-actions">
+          <el-switch
+            v-model="useEventStream"
+            active-text="事件流模式"
+            inactive-text="普通模式"
+            :disabled="isGenerating"
+            size="small"
+          />
           <span class="hint-text">
             描述你想要的功能，AI 将为你生成代码
           </span>
@@ -71,6 +78,20 @@
           </div>
           <div class="message-content">
             <div class="message-bubble">
+              <div v-if="msg.isEventStream && msg.steps && msg.steps.length > 0" class="step-progress step-progress-static">
+                <div
+                  v-for="(step, index) in msg.steps"
+                  :key="index"
+                  :class="['step-item', step.status]"
+                >
+                  <div class="step-indicator">
+                    <el-icon v-if="step.status === 'done'" :size="16" color="#10b981"><CircleCheck /></el-icon>
+                    <el-icon v-else-if="step.status === 'active'" :size="16" color="#4f46e5" class="is-loading"><Loading /></el-icon>
+                    <span v-else class="step-number">{{ index + 1 }}</span>
+                  </div>
+                  <span class="step-name">{{ step.name }}</span>
+                </div>
+              </div>
               <div v-if="msg.content" class="message-text" v-html="formatMessage(msg.content)"></div>
               <div v-else class="message-text">
                 <el-icon class="is-loading"><Loading /></el-icon>
@@ -87,8 +108,22 @@
           </div>
           <div class="message-content">
             <div class="message-bubble">
+              <div v-if="useEventStream && stepList.length > 0" class="step-progress">
+                <div
+                  v-for="(step, index) in stepList"
+                  :key="index"
+                  :class="['step-item', step.status]"
+                >
+                  <div class="step-indicator">
+                    <el-icon v-if="step.status === 'done'" :size="16" color="#10b981"><CircleCheck /></el-icon>
+                    <el-icon v-else-if="step.status === 'active'" :size="16" color="#4f46e5" class="is-loading"><Loading /></el-icon>
+                    <span v-else class="step-number">{{ index + 1 }}</span>
+                  </div>
+                  <span class="step-name">{{ step.name }}</span>
+                </div>
+              </div>
               <div class="message-text generating-text">
-                {{ currentOutput || '正在生成代码...' }}
+                {{ currentOutput || (useEventStream ? '正在启动工作流...' : '正在生成代码...') }}
                 <span class="cursor">|</span>
               </div>
             </div>
@@ -136,10 +171,11 @@ import {
   MagicStick,
   User,
   Loading,
-  Promotion
+  Promotion,
+  CircleCheck
 } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
-import { getAppDetail, downloadAppCode, deployApp } from '@/api/app'
+import { getAppDetail, downloadAppCode, deployApp, genCodeEventStreamUrl } from '@/api/app'
 import { listByAppId, deleteByAppId } from '@/api/chatHistory'
 import { useUserStore } from '@/store/user'
 
@@ -153,6 +189,9 @@ const inputMessage = ref('')
 const isGenerating = ref(false)
 const currentOutput = ref('')
 const messagesContainer = ref(null)
+const useEventStream = ref(false)
+const stepList = ref([])
+let abortController = null
 
 const getTypeLabel = (type) => {
   const map = {
@@ -233,57 +272,200 @@ const sendMessage = async () => {
 
   isGenerating.value = true
   currentOutput.value = ''
+  stepList.value = []
 
   scrollToBottom()
 
   const appId = route.params.appId
-  const eventSource = new EventSource(
-    `/api/app/chat/gen/code?appId=${appId}&message=${encodeURIComponent(userMessage)}`,
-    { withCredentials: true }
-  )
 
-  eventSource.onmessage = (event) => {
-    try {
-      const data = JSON.parse(event.data)
-      if (data.data) {
-        currentOutput.value += data.data
+  if (useEventStream.value) {
+    sendEventStreamMessage(appId, userMessage)
+  } else {
+    sendSimpleStreamMessage(appId, userMessage)
+  }
+}
+
+const sendSimpleStreamMessage = async (appId, userMessage) => {
+  abortController = new AbortController()
+  try {
+    const response = await fetch(
+      `/api/app/chat/gen/code?appId=${appId}&message=${encodeURIComponent(userMessage)}`,
+      { credentials: 'include', signal: abortController.signal }
+    )
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`)
+    }
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder('utf-8')
+    let buffer = ''
+
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+      for (const line of lines) {
+        if (line.startsWith('data:')) {
+          const dataStr = line.slice(5).trimStart()
+          if (!dataStr.trim()) continue
+          try {
+            const data = JSON.parse(dataStr)
+            if (data.data) {
+              currentOutput.value += data.data
+              scrollToBottom()
+            } else if (data.error) {
+              ElMessage.error(data.error)
+            }
+          } catch (e) {
+            currentOutput.value += dataStr
+            scrollToBottom()
+          }
+        }
+      }
+    }
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      return
+    }
+    console.error('流式请求失败:', error)
+    if (currentOutput.value) {
+      ElMessage.error('生成中断')
+    } else {
+      ElMessage.error('请求失败: ' + error.message)
+    }
+  } finally {
+    finishGeneration()
+  }
+}
+
+const sendEventStreamMessage = async (appId, userMessage) => {
+  abortController = new AbortController()
+  const url = genCodeEventStreamUrl(appId, userMessage)
+  console.log('[事件流] 开始请求:', url)
+  try {
+    const response = await fetch(url, { credentials: 'include', signal: abortController.signal })
+    console.log('[事件流] 响应状态:', response.status, response.statusText)
+    console.log('[事件流] Content-Type:', response.headers.get('content-type'))
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`)
+    }
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder('utf-8')
+    let buffer = ''
+    let eventCount = 0
+
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) {
+        console.log('[事件流] 流结束，共收到', eventCount, '个事件')
+        break
+      }
+      const chunk = decoder.decode(value, { stream: true })
+      buffer += chunk
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+      for (const line of lines) {
+        if (line.startsWith('data:')) {
+          const dataStr = line.slice(5).trimStart()
+          if (!dataStr.trim()) continue
+          try {
+            const wrapper = JSON.parse(dataStr)
+            if (wrapper.data) {
+              const workflowEvent = JSON.parse(wrapper.data)
+              eventCount++
+              console.log('[事件流] 收到事件', eventCount, ':', workflowEvent.eventType, workflowEvent.stepName || '')
+              handleWorkflowEvent(workflowEvent)
+            }
+          } catch (e) {
+            console.error('[事件流] 解析失败:', e, '原始数据:', dataStr)
+          }
+        }
+      }
+    }
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      console.log('[事件流] 请求被取消')
+      return
+    }
+    console.error('[事件流] 请求失败:', error)
+    if (!currentOutput.value) {
+      ElMessage.error('请求失败: ' + error.message)
+    }
+  } finally {
+    console.log('[事件流] finally 调用 finishGeneration')
+    finishGeneration()
+  }
+}
+
+const handleWorkflowEvent = (event) => {
+  const { eventType, stepName, content } = event
+  console.log('[handleWorkflowEvent] type:', eventType, 'step:', stepName, 'contentLen:', content?.length || 0)
+
+  switch (eventType) {
+    case 'step':
+      if (stepName) {
+        const existingIndex = stepList.value.findIndex(s => s.name === stepName)
+        if (existingIndex >= 0) {
+          stepList.value[existingIndex].status = 'done'
+        }
+        stepList.value.forEach((s, i) => {
+          if (i < stepList.value.length - 1) {
+            s.status = 'done'
+          }
+        })
+        stepList.value.push({ name: stepName, status: 'active' })
         scrollToBottom()
       }
-    } catch (e) {
-      currentOutput.value += event.data
-      scrollToBottom()
-    }
-  }
-
-  eventSource.onerror = () => {
-    eventSource.close()
-    isGenerating.value = false
-    if (currentOutput.value) {
-      messages.value.push({
-        role: 'ai',
-        content: currentOutput.value,
-        time: new Date()
+      break
+    case 'token':
+      if (content) {
+        currentOutput.value += content
+        scrollToBottom()
+      }
+      break
+    case 'complete':
+      stepList.value.forEach(s => {
+        s.status = 'done'
       })
-      currentOutput.value = ''
-    } else {
-      ElMessage.error('生成失败，请重试')
-    }
-    scrollToBottom()
+      if (useEventStream.value) {
+        messages.value.push({
+          role: 'ai',
+          content: currentOutput.value || '生成完成',
+          steps: [...stepList.value],
+          isEventStream: true,
+          time: new Date()
+        })
+        currentOutput.value = ''
+        stepList.value = []
+      }
+      finishGeneration()
+      break
+    case 'error':
+      ElMessage.error(content || '生成失败')
+      finishGeneration()
+      break
+    default:
+      break
   }
+}
 
-  eventSource.addEventListener('close', () => {
-    eventSource.close()
-    isGenerating.value = false
-    if (currentOutput.value) {
-      messages.value.push({
-        role: 'ai',
-        content: currentOutput.value,
-        time: new Date()
-      })
-      currentOutput.value = ''
-    }
-    scrollToBottom()
-  })
+const finishGeneration = () => {
+  if (abortController) {
+    abortController.abort()
+    abortController = null
+  }
+  isGenerating.value = false
+  if (!useEventStream.value && currentOutput.value) {
+    messages.value.push({
+      role: 'ai',
+      content: currentOutput.value,
+      time: new Date()
+    })
+    currentOutput.value = ''
+  }
+  stepList.value = []
+  scrollToBottom()
 }
 
 const clearHistory = async () => {
@@ -426,6 +608,64 @@ onMounted(() => {
   font-size: 16px;
   font-weight: 600;
   color: #1f2937;
+}
+
+.chat-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.step-progress {
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e5e7eb;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.step-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 16px;
+  font-size: 12px;
+  background-color: #f3f4f6;
+  color: #6b7280;
+}
+
+.step-item.done {
+  background-color: #ecfdf5;
+  color: #059669;
+}
+
+.step-item.active {
+  background-color: #eef2ff;
+  color: #4f46e5;
+}
+
+.step-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.step-number {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background-color: #d1d5db;
+  color: #fff;
+  font-size: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.step-name {
+  white-space: nowrap;
 }
 
 .hint-text {

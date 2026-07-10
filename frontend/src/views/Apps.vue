@@ -28,7 +28,7 @@
         @click="goToChat(app.id)"
       >
         <div class="app-cover">
-          <img v-if="app.cover" :src="app.cover" :alt="app.appName" />
+          <img v-if="fixImageUrl(app.cover)" :src="fixImageUrl(app.cover)" :alt="app.appName" @error="app.cover = ''" />
           <div v-else class="cover-placeholder">
             <el-icon :size="48"><Picture /></el-icon>
           </div>
@@ -78,8 +78,6 @@
         :total="total"
         :page-sizes="[10, 20, 50]"
         layout="total, sizes, prev, pager, next, jumper"
-        @size-change="fetchApps"
-        @current-change="fetchApps"
       />
     </div>
 
@@ -125,7 +123,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -204,12 +202,26 @@ const fetchApps = async () => {
       pageSize: pageSize.value
     })
     appList.value = res.list || []
-    total.value = res.total || 0
+    total.value = Number(res.total) || 0
   } catch (error) {
     console.error('获取应用列表失败:', error)
   } finally {
     loading.value = false
   }
+}
+
+watch([pageNum, pageSize], () => {
+  fetchApps()
+})
+
+const fixImageUrl = (url) => {
+  if (!url) return ''
+  if (url.startsWith('http://') || url.startsWith('https://')) return url
+  if (url.startsWith('//')) return 'https:' + url
+  if (url.includes('myqcloud.com') || url.includes('cos.')) {
+    return 'https://' + url.replace(/^\/+/, '')
+  }
+  return url
 }
 
 const goToChat = (appId) => {

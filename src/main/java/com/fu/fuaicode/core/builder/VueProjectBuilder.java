@@ -160,6 +160,14 @@ public class VueProjectBuilder {
      * @return 是否执行成功
      */
     public boolean buildVueProject(String workingDir) {
+        BuildStatus existingStatus = buildStatusMap.get(workingDir);
+        if (existingStatus != null &&
+            existingStatus.getPhase() != BuildStatus.BuildPhase.COMPLETED &&
+            existingStatus.getPhase() != BuildStatus.BuildPhase.FAILED) {
+            log.warn("该目录已有构建在进行中，跳过重复构建: {}", workingDir);
+            return false;
+        }
+
         BuildStatus status = new BuildStatus(
                 workingDir,
                 BuildStatus.BuildPhase.PENDING,
@@ -186,12 +194,17 @@ public class VueProjectBuilder {
         }
         log.info("开始构建Vue项目: {}", workingDir);
 
-        updateBuildStatus(workingDir, BuildStatus.BuildPhase.NPM_INSTALL, false, null);
-        if (!npmInstall(projectDir)) {
-            String errorMsg = "npm install 失败，请查看日志获取详细错误信息";
-            log.error(errorMsg);
-            updateBuildStatus(workingDir, BuildStatus.BuildPhase.FAILED, false, errorMsg);
-            return false;
+        File nodeModulesDir = new File(projectDir, "node_modules");
+        if (nodeModulesDir.exists() && nodeModulesDir.isDirectory()) {
+            log.info("检测到已存在 node_modules，跳过 npm install: {}", nodeModulesDir.getAbsolutePath());
+        } else {
+            updateBuildStatus(workingDir, BuildStatus.BuildPhase.NPM_INSTALL, false, null);
+            if (!npmInstall(projectDir)) {
+                String errorMsg = "npm install 失败，请查看日志获取详细错误信息";
+                log.error(errorMsg);
+                updateBuildStatus(workingDir, BuildStatus.BuildPhase.FAILED, false, errorMsg);
+                return false;
+            }
         }
 
         updateBuildStatus(workingDir, BuildStatus.BuildPhase.NPM_BUILD, false, null);

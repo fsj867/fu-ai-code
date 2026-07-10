@@ -13,6 +13,8 @@ import com.fu.fuaicode.constant.UserConstant;
 import com.fu.fuaicode.exception.BusinessException;
 import com.fu.fuaicode.exception.ErrorCode;
 import com.fu.fuaicode.exception.ThrowUtils;
+import com.fu.fuaicode.langgraph4j.CodeGenWorkflow;
+import com.fu.fuaicode.langgraph4j.state.WorkflowEvent;
 import com.fu.fuaicode.model.dto.app.*;
 import com.fu.fuaicode.model.entity.App;
 import com.fu.fuaicode.model.entity.User;
@@ -36,6 +38,7 @@ import reactor.core.publisher.Flux;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.publisher.Mono;
 
 import java.io.File;
@@ -43,11 +46,15 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import lombok.extern.slf4j.Slf4j;
+
+
 /**
  * 应用 控制层。
  *
  * @AUTHOR FSJ
  */
+@Slf4j
 @RestController
 @RequestMapping("/app")
 public class AppController {
@@ -57,7 +64,10 @@ public class AppController {
 
     @Autowired
     private UserService userService;
-
+    
+    @Autowired
+    private CodeGenWorkflow codeGenWorkflow;
+    
     /**
      * 用户创建应用
      *
@@ -223,7 +233,6 @@ public class AppController {
         
         return ResultUtils.success(result);
     }
-    
     /**
     * 应用聊天生成代码（流式 SSE）
     *
@@ -232,30 +241,113 @@ public class AppController {
     * @param request 请求对象
     * @return 生成结果流
     */
-    @RateLimit(limitType = RateLimitType.USER,rate = 5,rateInterval = 60) // 限制用户每分钟最多请求5次
+
+    @RateLimit(limitType = RateLimitType.USER,rate = 5,rateInterval = 60)
     @GetMapping(value = "/chat/gen/code", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<ServerSentEvent<String>> chatToGenCode(@RequestParam Long appId,
                                                        @RequestParam String message,
                                                        HttpServletRequest request) {
-    // 参数校验
-    ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR, "应用ID无效");
-    ThrowUtils.throwIf(StrUtil.isBlank(message), ErrorCode.PARAMS_ERROR, "用户消息不能为空");
-    // 获取当前登录用户
-    User loginUser = userService.getLoginUser(request);
-    // 调用服务生成代码（流式）
-        Flux<String> stringFlux = appService.chatToGenCode(appId, message, loginUser);
-        return stringFlux.map(
-                chunk ->{
-                    //包装json
-                    Map<String, String> data = new HashMap<>();
-                    data.put("data", chunk);
-                    String jsonStr = JSONUtil.toJsonStr(data);
-                    return ServerSentEvent.<String>builder()
-                            .data(jsonStr)
-                            .build();
-                }
-        );
+        try {
+            // 参数校验
+            ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR, "应用ID无效");
+            ThrowUtils.throwIf(StrUtil.isBlank(message), ErrorCode.PARAMS_ERROR, "用户消息不能为空");
+            // 获取当前登录用户
+            User loginUser = userService.getLoginUser(request);
+            // 调用服务生成代码（流式）
+            Flux<String> stringFlux = appService.chatToGenCode(appId, message, loginUser);
+            return stringFlux
+                    .map(chunk -> {
+                        Map<String, String> data = new HashMap<>();
+                        data.put("data", chunk);
+                        String jsonStr = JSONUtil.toJsonStr(data);
+                        return ServerSentEvent.<String>builder()
+                                .data(jsonStr)
+                                .build();
+                    })
+                    .onErrorResume(e -> {
+                        log.error("流式生成代码异常", e);
+                        Map<String, String> errorData = new HashMap<>();
+                        errorData.put("error", e.getMessage() != null ? e.getMessage() : "生成失败");
+                        return Flux.just(ServerSentEvent.<String>builder()
+                                .data(JSONUtil.toJsonStr(errorData))
+                                .build());
+                    });
+        } catch (Exception e) {
+            log.error("启动流式生成失败", e);
+            Map<String, String> errorData = new HashMap<>();
+            errorData.put("error", e.getMessage() != null ? e.getMessage() : "生成失败");
+            return Flux.just(ServerSentEvent.<String>builder()
+                    .data(JSONUtil.toJsonStr(errorData))
+                    .build());
+        }
     }
+    /**
+     * 应用事件流生成代码（流式 SSE）
+     * @param appId 应用 ID
+     * @param message 用户消息
+     * @param request 请求对象
+     * @return 生成结果流
+     */
+    @RateLimit(limitType = RateLimitType.USER,rate = 5,rateInterval = 60)
+    @GetMapping(value = "/chat/event/code", produces = "text/event-stream;charset=UTF-8")
+    public SseEmitter genCode(@RequestParam Long appId,
+                              @RequestParam String message,
+                              HttpServletRequest request) {
+        try {
+            ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR, "应用ID无效");
+            ThrowUtils.throwIf(StrUtil.isBlank(message), ErrorCode.PARAMS_ERROR, "用户消息不能为空");
+            User loginUser = userService.getLoginUser(request);
+            log.info("事件流接口: 开始执行，appId={}", appId);
+            SseEmitter emitter = codeGenWorkflow.executeSse(message, appId, loginUser);
+            log.info("事件流接口: 已返回 SseEmitter");
+            return emitter;
+        } catch (Exception e) {
+            log.error("启动事件流生成失败", e);
+            SseEmitter emitter = new SseEmitter();
+            try {
+                WorkflowEvent errorEvent = new WorkflowEvent();
+                errorEvent.setEventType(WorkflowEvent.TYPE_ERROR);
+                errorEvent.setContent(e.getMessage() != null ? e.getMessage() : "生成失败");
+                Map<String, String> errorData = new HashMap<>();
+                errorData.put("data", JSONUtil.toJsonStr(errorEvent));
+                emitter.send(SseEmitter.event().data(JSONUtil.toJsonStr(errorData)));
+                emitter.complete();
+            } catch (Exception ex) {
+                emitter.completeWithError(ex);
+            }
+            return emitter;
+        }
+    }
+    
+    /**
+     * 测试 SSE 端点：直接发 3 个简单事件，验证基础通道
+     */
+    @GetMapping(value = "/chat/event/test", produces = "text/event-stream;charset=UTF-8")
+    public SseEmitter testSse() {
+        log.info("测试 SSE 端点被调用");
+        SseEmitter emitter = new SseEmitter(0L);
+        Thread.startVirtualThread(() -> {
+            try {
+                for (int i = 1; i <= 3; i++) {
+                    Thread.sleep(500);
+                    WorkflowEvent event = new WorkflowEvent();
+                    event.setEventType("step");
+                    event.setStepName("测试步骤" + i);
+                    Map<String, String> data = new HashMap<>();
+                    data.put("data", JSONUtil.toJsonStr(event));
+                    emitter.send(SseEmitter.event().data(JSONUtil.toJsonStr(data)));
+                    log.info("测试 SSE 发送事件 {}", i);
+                }
+                emitter.complete();
+                log.info("测试 SSE 完成");
+            } catch (Exception e) {
+                log.error("测试 SSE 异常", e);
+                emitter.completeWithError(e);
+            }
+        });
+        return emitter;
+    }
+
     /**
      * 应用部署
      *

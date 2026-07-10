@@ -99,3 +99,7 @@ export function deployApp(data) {
 export function downloadAppCode(appId) {
   return `/api/app/download/${appId}`
 }
+
+export function genCodeEventStreamUrl(appId, message) {
+  return `/api/app/chat/event/code?appId=${appId}&message=${encodeURIComponent(message)}`
+}
