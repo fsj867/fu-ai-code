@@ -6,63 +6,86 @@
           新建应用
         </el-button>
       </div>
-      <div class="app-info-section" v-if="app">
-        <div class="app-info-header">
-          <el-avatar :size="40" :icon="Grid" />
-          <div class="app-info-text">
-            <h4 class="app-name">{{ app.appName }}</h4>
-            <span class="app-type">{{ getTypeLabel(app.codeGenType) }}</span>
-          </div>
+
+      <div class="app-info-card" v-if="app">
+        <div class="app-icon">
+          <el-icon :size="24"><MagicStick /></el-icon>
+        </div>
+        <div class="app-info-text">
+          <h4 class="app-name">{{ app.appName }}</h4>
+          <span class="app-type">{{ getTypeLabel(app.codeGenType) }}</span>
+        </div>
+        <div v-if="app.deployKey" class="deploy-badge">
+          <el-icon :size="12"><CircleCheck /></el-icon>
+          已部署
         </div>
       </div>
+
       <div class="sidebar-actions">
-        <el-button :icon="Download" @click="handleDownload" style="width: 100%">
-          下载代码
-        </el-button>
-        <el-button :icon="UploadFilled" @click="handleDeploy" style="width: 100%">
-          部署应用
-        </el-button>
-        <el-button type="danger" :icon="Delete" @click="clearHistory" style="width: 100%">
-          清空对话
-        </el-button>
+        <div class="action-group">
+          <span class="action-label">应用操作</span>
+          <el-button v-if="app?.deployKey" :icon="View" class="action-btn" @click="handlePreview">
+            预览应用
+          </el-button>
+          <el-button :icon="Download" class="action-btn" @click="handleDownload">
+            下载代码
+          </el-button>
+          <el-button :icon="UploadFilled" class="action-btn" @click="handleDeploy">
+            部署应用
+          </el-button>
+        </div>
+        <div class="action-group danger-group">
+          <span class="action-label">危险操作</span>
+          <el-button type="danger" :icon="Delete" class="action-btn" @click="clearHistory">
+            清空对话
+          </el-button>
+        </div>
       </div>
     </div>
 
     <div class="chat-main">
       <div class="chat-header">
-        <div class="chat-title">
-          <el-icon :size="20" color="#4f46e5"><MagicStick /></el-icon>
-          <span>AI 代码生成助手</span>
+        <div class="chat-title-section">
+          <div class="chat-icon">
+            <el-icon :size="18"><MagicStick /></el-icon>
+          </div>
+          <div class="chat-title-text">
+            <span class="chat-title">AI 代码生成助手</span>
+            <span class="chat-subtitle">{{ app?.appName || '选择一个应用开始' }}</span>
+          </div>
         </div>
         <div class="chat-header-actions">
-          <el-switch
-            v-model="useEventStream"
-            active-text="事件流模式"
-            inactive-text="普通模式"
-            :disabled="isGenerating"
-            size="small"
-          />
-          <span class="hint-text">
-            描述你想要的功能，AI 将为你生成代码
-          </span>
+          <div class="mode-switch">
+            <el-switch
+              v-model="useEventStream"
+              active-text="工作流模式"
+              inactive-text="普通模式"
+              :disabled="isGenerating"
+              size="small"
+            />
+          </div>
         </div>
       </div>
 
       <div class="chat-messages" ref="messagesContainer">
-        <div class="message-item ai-message" v-if="messages.length === 0">
-          <div class="message-avatar">
-            <el-icon :size="20"><MagicStick /></el-icon>
+        <div v-if="messages.length === 0" class="welcome-section">
+          <div class="welcome-hero">
+            <div class="welcome-icon">
+              <el-icon :size="36"><MagicStick /></el-icon>
+            </div>
+            <h2 class="welcome-title">开始你的 AI 编程之旅</h2>
+            <p class="welcome-desc">描述你想要的功能，我将为你生成完整的代码</p>
           </div>
-          <div class="message-content">
-            <div class="message-bubble welcome-bubble">
-              <h3>👋 你好！我是 AI 代码生成助手</h3>
-              <p>我可以帮你生成各种类型的代码，包括：</p>
-              <ul>
-                <li>HTML 单页应用</li>
-                <li>多文件项目</li>
-                <li>Vue 项目</li>
-              </ul>
-              <p>请描述你想要实现的功能，我将为你生成代码！</p>
+          <div class="quick-prompts">
+            <span class="quick-prompts-label">快速开始</span>
+            <div class="prompt-grid">
+              <div class="prompt-card" v-for="(prompt, index) in quickPrompts" :key="index" @click="usePrompt(prompt)">
+                <div class="prompt-icon">{{ prompt.icon }}</div>
+                <div class="prompt-info">
+                  <span class="prompt-title">{{ prompt.title }}</span>
+                  <span class="prompt-desc">{{ prompt.desc }}</span>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -72,41 +95,48 @@
           :key="index"
           :class="['message-item', msg.role === 'user' ? 'user-message' : 'ai-message']"
         >
-          <div class="message-avatar">
-            <el-icon v-if="msg.role === 'user'" :size="20"><User /></el-icon>
-            <el-icon v-else :size="20"><MagicStick /></el-icon>
+          <div class="message-avatar" :class="msg.role">
+            <el-icon v-if="msg.role === 'user'" :size="18"><User /></el-icon>
+            <el-icon v-else :size="18"><MagicStick /></el-icon>
           </div>
           <div class="message-content">
+            <div class="message-meta">
+              <span class="message-role">{{ msg.role === 'user' ? '你' : 'AI 助手' }}</span>
+              <span class="message-time">{{ formatTime(msg.time) }}</span>
+            </div>
             <div class="message-bubble">
               <div v-if="msg.isEventStream && msg.steps && msg.steps.length > 0" class="step-progress step-progress-static">
                 <div
-                  v-for="(step, index) in msg.steps"
-                  :key="index"
+                  v-for="(step, stepIndex) in msg.steps"
+                  :key="stepIndex"
                   :class="['step-item', step.status]"
                 >
                   <div class="step-indicator">
-                    <el-icon v-if="step.status === 'done'" :size="16" color="#10b981"><CircleCheck /></el-icon>
-                    <el-icon v-else-if="step.status === 'active'" :size="16" color="#4f46e5" class="is-loading"><Loading /></el-icon>
-                    <span v-else class="step-number">{{ index + 1 }}</span>
+                    <el-icon v-if="step.status === 'done'" :size="14" color="#10b981"><CircleCheck /></el-icon>
+                    <el-icon v-else-if="step.status === 'active'" :size="14" color="#4f46e5" class="is-loading"><Loading /></el-icon>
+                    <span v-else class="step-number">{{ stepIndex + 1 }}</span>
                   </div>
                   <span class="step-name">{{ step.name }}</span>
                 </div>
               </div>
               <div v-if="msg.content" class="message-text" v-html="formatMessage(msg.content)"></div>
-              <div v-else class="message-text">
+              <div v-else class="message-text thinking-text">
                 <el-icon class="is-loading"><Loading /></el-icon>
                 正在思考...
               </div>
             </div>
-            <div class="message-time">{{ formatTime(msg.time) }}</div>
           </div>
         </div>
 
         <div v-if="isGenerating" class="message-item ai-message">
-          <div class="message-avatar">
-            <el-icon :size="20"><MagicStick /></el-icon>
+          <div class="message-avatar ai">
+            <el-icon :size="18"><MagicStick /></el-icon>
           </div>
           <div class="message-content">
+            <div class="message-meta">
+              <span class="message-role">AI 助手</span>
+              <span class="message-time">正在生成...</span>
+            </div>
             <div class="message-bubble">
               <div v-if="useEventStream && stepList.length > 0" class="step-progress">
                 <div
@@ -115,8 +145,8 @@
                   :class="['step-item', step.status]"
                 >
                   <div class="step-indicator">
-                    <el-icon v-if="step.status === 'done'" :size="16" color="#10b981"><CircleCheck /></el-icon>
-                    <el-icon v-else-if="step.status === 'active'" :size="16" color="#4f46e5" class="is-loading"><Loading /></el-icon>
+                    <el-icon v-if="step.status === 'done'" :size="14" color="#10b981"><CircleCheck /></el-icon>
+                    <el-icon v-else-if="step.status === 'active'" :size="14" color="#4f46e5" class="is-loading"><Loading /></el-icon>
                     <span v-else class="step-number">{{ index + 1 }}</span>
                   </div>
                   <span class="step-name">{{ step.name }}</span>
@@ -132,29 +162,63 @@
       </div>
 
       <div class="chat-input-area">
-        <div class="input-wrapper">
-          <el-input
-            v-model="inputMessage"
-            type="textarea"
-            :rows="3"
-            placeholder="请描述你想要生成的代码功能..."
-            :disabled="isGenerating"
-            @keydown.enter.ctrl="sendMessage"
-          />
-          <div class="input-actions">
-            <span class="tip-text">按 Ctrl + Enter 发送</span>
+        <div class="input-container">
+          <div class="input-wrapper">
+            <el-input
+              v-model="inputMessage"
+              type="textarea"
+              :rows="2"
+              :autosize="{ minRows: 2, maxRows: 6 }"
+              placeholder="描述你想要生成的代码功能... (Ctrl + Enter 发送)"
+              :disabled="isGenerating"
+              @keydown.enter.ctrl="sendMessage"
+              resize="none"
+              class="chat-input"
+            />
+          </div>
+          <div class="input-footer">
+            <div class="input-hints">
+              <span class="hint-item">
+                <el-icon :size="12"><InfoFilled /></el-icon>
+                描述越详细，生成效果越好
+              </span>
+            </div>
             <el-button
               type="primary"
               :icon="Promotion"
               :loading="isGenerating"
               @click="sendMessage"
+              class="send-btn"
             >
-              {{ isGenerating ? '生成中...' : '发送' }}
+              {{ isGenerating ? '生成中' : '发送' }}
             </el-button>
           </div>
         </div>
       </div>
     </div>
+
+    <el-dialog v-model="showPreviewDialog" title="应用预览" width="85%" class="preview-dialog" top="5vh" destroy-on-close>
+      <div class="preview-container">
+        <div class="preview-toolbar">
+          <div class="preview-url" :title="previewUrl">
+            <el-icon :size="14"><Lock /></el-icon>
+            <span>{{ previewUrl }}</span>
+          </div>
+          <el-button size="small" :icon="Open" @click="openInNewTab">
+            新窗口打开
+          </el-button>
+        </div>
+        <div class="preview-frame-wrapper">
+          <iframe
+            v-if="showPreviewDialog"
+            :src="previewUrl"
+            class="preview-iframe"
+            frameborder="0"
+            sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
+          ></iframe>
+        </div>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -164,15 +228,18 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Plus,
-  Grid,
-  Download,
-  UploadFilled,
-  Delete,
   MagicStick,
   User,
   Loading,
   Promotion,
-  CircleCheck
+  CircleCheck,
+  Download,
+  UploadFilled,
+  Delete,
+  InfoFilled,
+  View,
+  Lock,
+  Open
 } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import { getAppDetail, downloadAppCode, deployApp, genCodeEventStreamUrl } from '@/api/app'
@@ -192,6 +259,31 @@ const messagesContainer = ref(null)
 const useEventStream = ref(false)
 const stepList = ref([])
 let abortController = null
+
+const showPreviewDialog = ref(false)
+const previewUrl = ref('')
+
+const handlePreview = () => {
+  if (!app.value?.deployKey) {
+    ElMessage.warning('请先部署应用后再预览')
+    return
+  }
+  previewUrl.value = `/api/static/${app.value.deployKey}/`
+  showPreviewDialog.value = true
+}
+
+const openInNewTab = () => {
+  if (previewUrl.value) {
+    window.open(previewUrl.value, '_blank')
+  }
+}
+
+const quickPrompts = [
+  { icon: '🌐', title: '企业官网', desc: '生成一个现代化企业展示网站', text: '生成一个现代化的企业官网，包含首页、产品中心、关于我们、新闻资讯、联系我们等页面，风格要大气有科技感' },
+  { icon: '🛒', title: '电商后台', desc: '生成电商管理后台系统', text: '生成一个电商后台管理系统，包含商品管理、订单管理、用户管理、数据统计等功能模块' },
+  { icon: '📱', title: '移动端H5', desc: '生成移动端适配页面', text: '生成一个移动端H5活动页面，包含活动介绍、参与方式、奖品展示、立即参与按钮等，适配手机屏幕' },
+  { icon: '📊', title: '数据大屏', desc: '生成数据可视化大屏', text: '生成一个数据可视化大屏页面，展示销售数据、用户增长、热门排行等，要有酷炫的图表效果' }
+]
 
 const getTypeLabel = (type) => {
   const map = {
@@ -256,6 +348,10 @@ const fetchHistory = async () => {
   } catch (error) {
     console.error('获取对话历史失败:', error)
   }
+}
+
+const usePrompt = (prompt) => {
+  inputMessage.value = prompt.text
 }
 
 const sendMessage = async () => {
@@ -470,10 +566,11 @@ const finishGeneration = () => {
 
 const clearHistory = async () => {
   try {
-    await ElMessageBox.confirm('确定要清空所有对话历史吗？', '提示', {
-      confirmButtonText: '确定',
+    await ElMessageBox.confirm('确定要清空所有对话历史吗？', '清空确认', {
+      confirmButtonText: '确定清空',
       cancelButtonText: '取消',
-      type: 'warning'
+      type: 'warning',
+      confirmButtonClass: 'el-button--danger'
     })
     const appId = route.params.appId
     await deleteByAppId(appId)
@@ -523,50 +620,73 @@ onMounted(() => {
 <style scoped>
 .chat-page {
   display: flex;
-  height: calc(100vh - 112px);
-  background-color: #f9fafb;
-  border-radius: 12px;
+  height: 100%;
+  background: var(--bg-secondary);
+  border-radius: 16px;
   overflow: hidden;
 }
 
 .chat-sidebar {
-  width: 260px;
-  background-color: #fff;
-  border-right: 1px solid #e5e7eb;
+  width: 280px;
+  background: var(--bg-primary);
+  border-right: 1px solid var(--border-primary);
   display: flex;
   flex-direction: column;
+  flex-shrink: 0;
 }
 
 .sidebar-header {
   padding: 16px;
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid var(--border-secondary);
 }
 
 .new-chat-btn {
   width: 100%;
+  height: 40px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+  border: none;
+  font-weight: 500;
+  transition: all 0.2s ease;
 }
 
-.app-info-section {
+.new-chat-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+}
+
+.app-info-card {
+  margin: 16px;
   padding: 16px;
-  border-bottom: 1px solid #e5e7eb;
+  background: var(--bg-secondary);
+  border-radius: 12px;
+  border: 1px solid var(--border-secondary);
 }
 
-.app-info-header {
+.app-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+  color: #fff;
   display: flex;
-  gap: 12px;
   align-items: center;
+  justify-content: center;
+  margin-bottom: 12px;
 }
 
 .app-info-text {
-  flex: 1;
-  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
 }
 
 .app-name {
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
-  color: #1f2937;
-  margin: 0 0 4px;
+  color: var(--text-primary);
+  margin: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -574,14 +694,66 @@ onMounted(() => {
 
 .app-type {
   font-size: 12px;
-  color: #6b7280;
+  color: var(--text-tertiary);
+}
+
+.deploy-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: var(--success-light);
+  color: var(--success);
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: 20px;
 }
 
 .sidebar-actions {
-  padding: 16px;
+  padding: 8px 16px 16px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 20px;
+}
+
+.action-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.action-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-quaternary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0 4px;
+}
+
+.action-btn {
+  width: 100%;
+  justify-content: flex-start;
+  padding-left: 12px;
+  height: 38px;
+  border-radius: 8px;
+  border: 1px solid var(--border-primary);
+  transition: all 0.15s ease;
+}
+
+.action-btn:hover {
+  background: var(--bg-secondary);
+  border-color: var(--text-placeholder);
+}
+
+.danger-group .action-btn {
+  color: var(--danger);
+  border-color: var(--danger-light);
+}
+
+.danger-group .action-btn:hover {
+  background: var(--danger-light);
+  border-color: var(--danger);
 }
 
 .chat-main {
@@ -589,40 +761,260 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  background: var(--bg-primary);
 }
 
 .chat-header {
   height: 60px;
   padding: 0 24px;
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid var(--border-secondary);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background-color: #fff;
+  flex-shrink: 0;
+  background: var(--bg-primary);
+}
+
+.chat-title-section {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.chat-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-title-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .chat-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+
+.chat-subtitle {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.mode-switch {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.chat-messages {
+  flex: 1;
+  padding: 32px 24px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.welcome-section {
+  max-width: 720px;
+  margin: auto;
+  width: 100%;
+}
+
+.welcome-hero {
+  text-align: center;
+  margin-bottom: 40px;
+}
+
+.welcome-icon {
+  width: 64px;
+  height: 64px;
+  border-radius: 18px;
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 20px;
+  box-shadow: 0 8px 24px rgba(99, 102, 241, 0.3);
+}
+
+.welcome-title {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0 0 8px;
+  letter-spacing: -0.02em;
+}
+
+.welcome-desc {
+  font-size: 15px;
+  color: var(--text-tertiary);
+  margin: 0;
+}
+
+.quick-prompts {
+  width: 100%;
+}
+
+.quick-prompts-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-quaternary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 12px;
+  text-align: center;
+}
+
+.prompt-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+.prompt-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.prompt-card:hover {
+  background: var(--primary-light);
+  border-color: var(--primary);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-sm);
+}
+
+.prompt-icon {
+  font-size: 24px;
+  flex-shrink: 0;
+}
+
+.prompt-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.prompt-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.prompt-desc {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-item {
+  display: flex;
+  gap: 14px;
+  max-width: 100%;
+}
+
+.user-message {
+  flex-direction: row-reverse;
+}
+
+.message-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.message-avatar.ai {
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.25);
+}
+
+.message-avatar.user {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.message-content {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: calc(100% - 50px);
+}
+
+.user-message .message-content {
+  align-items: flex-end;
+}
+
+.message-meta {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 16px;
-  font-weight: 600;
-  color: #1f2937;
+  padding: 0 4px;
 }
 
-.chat-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 16px;
+.message-role {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+}
+
+.message-time {
+  font-size: 11px;
+  color: var(--text-quaternary);
+}
+
+.message-bubble {
+  padding: 14px 18px;
+  border-radius: 14px;
+  line-height: 1.7;
+  word-break: break-word;
+}
+
+.ai-message .message-bubble {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-top-left-radius: 4px;
+}
+
+.user-message .message-bubble {
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+  color: #fff;
+  border-top-right-radius: 4px;
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.25);
 }
 
 .step-progress {
-  margin-bottom: 12px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid #e5e7eb;
+  margin-bottom: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border-secondary);
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
 }
 
 .step-item {
@@ -630,20 +1022,21 @@ onMounted(() => {
   align-items: center;
   gap: 6px;
   padding: 4px 10px;
-  border-radius: 16px;
+  border-radius: 20px;
   font-size: 12px;
-  background-color: #f3f4f6;
-  color: #6b7280;
+  background: var(--bg-tertiary);
+  color: var(--text-tertiary);
+  font-weight: 500;
 }
 
 .step-item.done {
-  background-color: #ecfdf5;
-  color: #059669;
+  background: var(--success-light);
+  color: var(--success);
 }
 
 .step-item.active {
-  background-color: #eef2ff;
-  color: #4f46e5;
+  background: var(--primary-light);
+  color: var(--primary);
 }
 
 .step-indicator {
@@ -656,7 +1049,7 @@ onMounted(() => {
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background-color: #d1d5db;
+  background: var(--text-placeholder);
   color: #fff;
   font-size: 10px;
   display: flex;
@@ -664,111 +1057,16 @@ onMounted(() => {
   justify-content: center;
 }
 
-.step-name {
-  white-space: nowrap;
-}
-
-.hint-text {
-  font-size: 13px;
-  color: #9ca3af;
-}
-
-.chat-messages {
-  flex: 1;
-  padding: 24px;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-.message-item {
-  display: flex;
-  gap: 12px;
-  max-width: 85%;
-}
-
-.user-message {
-  align-self: flex-end;
-  flex-direction: row-reverse;
-}
-
-.message-avatar {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-
-.ai-message .message-avatar {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: #fff;
-}
-
-.user-message .message-avatar {
-  background-color: #4f46e5;
-  color: #fff;
-}
-
-.message-content {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.user-message .message-content {
-  align-items: flex-end;
-}
-
-.message-bubble {
-  padding: 12px 16px;
-  border-radius: 12px;
-  line-height: 1.6;
-}
-
-.ai-message .message-bubble {
-  background-color: #fff;
-  border: 1px solid #e5e7eb;
-  border-top-left-radius: 4px;
-}
-
-.user-message .message-bubble {
-  background-color: #4f46e5;
-  color: #fff;
-  border-top-right-radius: 4px;
-}
-
-.welcome-bubble {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: #fff;
-  border: none;
-}
-
-.welcome-bubble h3 {
-  margin: 0 0 12px;
-  font-size: 18px;
-}
-
-.welcome-bubble p {
-  margin: 8px 0;
-}
-
-.welcome-bubble ul {
-  margin: 8px 0;
-  padding-left: 20px;
-}
-
-.welcome-bubble li {
-  margin: 4px 0;
-}
-
 .message-text {
   font-size: 14px;
   white-space: pre-wrap;
-  word-break: break-word;
+}
+
+.thinking-text {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-tertiary);
 }
 
 .generating-text {
@@ -779,45 +1077,158 @@ onMounted(() => {
   display: inline-block;
   width: 2px;
   height: 16px;
-  background-color: #4f46e5;
+  background: var(--primary);
   margin-left: 2px;
   animation: blink 1s infinite;
+  vertical-align: text-bottom;
 }
 
 @keyframes blink {
-  0%, 50% {
-    opacity: 1;
-  }
-  51%, 100% {
-    opacity: 0;
-  }
-}
-
-.message-time {
-  font-size: 11px;
-  color: #9ca3af;
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
 }
 
 .chat-input-area {
   padding: 16px 24px 24px;
-  background-color: #fff;
-  border-top: 1px solid #e5e7eb;
+  border-top: 1px solid var(--border-secondary);
+  background: var(--bg-primary);
 }
 
-.input-wrapper {
-  max-width: 900px;
+.input-container {
+  max-width: 800px;
   margin: 0 auto;
 }
 
-.input-actions {
+.input-wrapper {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: 14px;
+  padding: 12px 14px;
+  transition: all 0.2s ease;
+}
+
+.input-wrapper:focus-within {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.1);
+  background: var(--bg-primary);
+}
+
+.chat-input :deep(.el-textarea__inner) {
+  background: transparent;
+  border: none;
+  box-shadow: none !important;
+  font-size: 14px;
+  line-height: 1.6;
+  padding: 0;
+}
+
+.chat-input :deep(.el-textarea__inner:focus) {
+  box-shadow: none !important;
+}
+
+.input-footer {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-top: 8px;
+  margin-top: 10px;
 }
 
-.tip-text {
+.input-hints {
+  display: flex;
+  gap: 16px;
+}
+
+.hint-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--text-quaternary);
+}
+
+.send-btn {
+  height: 36px;
+  padding: 0 18px;
+  border-radius: 9px;
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+  border: none;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.send-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.35);
+}
+
+@media (max-width: 1024px) {
+  .chat-sidebar {
+    display: none;
+  }
+
+  .prompt-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.preview-dialog :deep(.el-dialog) {
+  border-radius: 16px;
+  overflow: hidden;
+  max-height: 90vh;
+}
+
+.preview-dialog :deep(.el-dialog__header) {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-secondary);
+  margin-right: 0;
+}
+
+.preview-dialog :deep(.el-dialog__body) {
+  padding: 0;
+  max-height: calc(90vh - 60px);
+  overflow: hidden;
+}
+
+.preview-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.preview-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-secondary);
+}
+
+.preview-url {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-tertiary);
+  background: var(--bg-primary);
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-primary);
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-frame-wrapper {
+  flex: 1;
+  background: #fff;
+  min-height: 60vh;
+}
+
+.preview-iframe {
+  width: 100%;
+  height: 60vh;
+  border: none;
 }
 </style>
