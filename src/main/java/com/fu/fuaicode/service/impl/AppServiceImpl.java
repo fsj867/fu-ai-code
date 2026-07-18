@@ -15,6 +15,7 @@ import lombok.extern.slf4j.Slf4j;
 import reactor.core.publisher.Flux;
 
 import com.fu.fuaicode.core.AiCodeGeneratorFacade;
+import com.fu.fuaicode.core.builder.VueProjectBuilder;
 import com.fu.fuaicode.exception.BusinessException;
 import com.fu.fuaicode.exception.ErrorCode;
 import com.fu.fuaicode.exception.ThrowUtils;
@@ -61,6 +62,8 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
     private ScreenshotService screenshotService;
     @Resource
     private AiCodeGenTypeRoutingService aiCodeGenTypeRoutingService;
+    @Resource
+    private VueProjectBuilder vueProjectBuilder;
     @Override
     public Long createApp(AppAddRequest appAddRequest, Long userId) {
         ThrowUtils.throwIf(appAddRequest.getInitPrompt() == null, ErrorCode.PARAMS_ERROR,"初始化提示不能为空");
@@ -358,7 +361,14 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         if(codeGenType.equals("vue_project")){
             File distDir = new File(sourceDir, "dist");
             if (!distDir.exists() || !distDir.isDirectory()) {
-                throw new BusinessException(ErrorCode.SYSTEM_ERROR,"dist目录不存在，请先等待构建完成或重新生成代码");
+                log.info("dist目录不存在，等待构建完成: {}", distDir.getAbsolutePath());
+                boolean buildCompleted = waitForBuildCompletion(sourceDirPath);
+                if (!buildCompleted) {
+                    throw new BusinessException(ErrorCode.SYSTEM_ERROR,"构建超时，请稍后重试或重新生成代码");
+                }
+                if (!distDir.exists() || !distDir.isDirectory()) {
+                    throw new BusinessException(ErrorCode.SYSTEM_ERROR,"构建失败，请查看日志获取详细错误信息");
+                }
             }
             sourceDir = distDir;
             log.info("vue项目构建成功，将部署dist目录：{}", distDir.getAbsolutePath());
@@ -452,6 +462,55 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         return aiCodeGeneratorFacade.generateAndSaveCodeStream(message, codeGenTypeEnum, appId);
     }
 
+
+    /**
+     * 等待构建完成
+     * @param workingDir 工作目录
+     * @return 是否在超时前完成
+     */
+    private boolean waitForBuildCompletion(String workingDir) {
+        long startTime = System.currentTimeMillis();
+        long timeoutMs = 600000;
+        long checkIntervalMs = 3000;
+        
+        log.info("开始等待构建完成: workingDir={}, timeout={}ms", workingDir, timeoutMs);
+        
+        while (System.currentTimeMillis() - startTime < timeoutMs) {
+            VueProjectBuilder.BuildStatus status = vueProjectBuilder.getBuildStatus(workingDir);
+            
+            if (status == null) {
+                try {
+                    Thread.sleep(checkIntervalMs);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return false;
+                }
+                continue;
+            }
+            
+            switch (status.getPhase()) {
+                case COMPLETED:
+                    log.info("构建完成: workingDir={}", workingDir);
+                    return true;
+                case FAILED:
+                    log.error("构建失败: workingDir={}, error={}", workingDir, status.getErrorMessage());
+                    return false;
+                default:
+                    log.debug("构建中: workingDir={}, phase={}", workingDir, status.getPhase());
+                    break;
+            }
+            
+            try {
+                Thread.sleep(checkIntervalMs);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        
+        log.error("构建超时: workingDir={}, timeout={}ms", workingDir, timeoutMs);
+        return false;
+    }
 
     /**
      * 异步生成应用截图并更新封面

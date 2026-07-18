@@ -3,6 +3,8 @@ package com.fu.fuaicode.langgraph4j.node;
 import com.fu.fuaicode.core.builder.VueProjectBuilder;
 import com.fu.fuaicode.langgraph4j.SpringContextUtil;
 import com.fu.fuaicode.langgraph4j.state.WorkflowContext;
+import com.fu.fuaicode.mq.BuildTask;
+import com.fu.fuaicode.mq.BuildTaskProducer;
 import com.fu.fuaicode.model.enums.CodeGenTypeEnum;
 import lombok.extern.slf4j.Slf4j;
 import org.bsc.langgraph4j.action.AsyncNodeAction;
@@ -28,38 +30,33 @@ public class ProjectBuilderNode {
                 try {
                     VueProjectBuilder vueBuilder = SpringContextUtil.getBean(VueProjectBuilder.class);
                     
-                    // 检查是否已有构建结果（dist 目录存在且是目录）
                     File distDir = new File(generatedCodeDir, "dist");
                     if (distDir.exists() && distDir.isDirectory()) {
-                        log.info("检测到已存在 dist 目录，跳过构建: {}", distDir.getAbsolutePath());
-                        buildResultDir = distDir.getAbsolutePath();
+                        log.info("检测到已存在 dist 目录，删除以触发重新构建: {}", distDir.getAbsolutePath());
+                        cn.hutool.core.io.FileUtil.del(distDir);
+                    }
+                    
+                    VueProjectBuilder.BuildStatus existingStatus = vueBuilder.getBuildStatus(generatedCodeDir);
+                    if (existingStatus != null && 
+                        existingStatus.getPhase() != VueProjectBuilder.BuildStatus.BuildPhase.COMPLETED &&
+                        existingStatus.getPhase() != VueProjectBuilder.BuildStatus.BuildPhase.FAILED) {
+                        log.warn("检测到该目录已有构建在进行中，跳过重复发送: {}", generatedCodeDir);
+                        buildResultDir = generatedCodeDir;
                     } else {
-                        // 检查是否正在构建中，避免并发重复构建
-                        VueProjectBuilder.BuildStatus existingStatus = vueBuilder.getBuildStatus(generatedCodeDir);
-                        if (existingStatus != null && 
-                            existingStatus.getPhase() != VueProjectBuilder.BuildStatus.BuildPhase.COMPLETED &&
-                            existingStatus.getPhase() != VueProjectBuilder.BuildStatus.BuildPhase.FAILED) {
-                            log.warn("检测到该目录已有构建在进行中，等待完成: {}", generatedCodeDir);
-                        }
-                        
-                        boolean buildSuccess = vueBuilder.buildVueProject(generatedCodeDir);
-                        if (buildSuccess) {
-                            buildResultDir = distDir.getAbsolutePath();
-                            log.info("Vue 项目构建成功，dist 目录: {}", buildResultDir);
-                        } else {
-                            String errorMsg = "Vue 项目构建失败";
-                            VueProjectBuilder.BuildStatus status = vueBuilder.getBuildStatus(generatedCodeDir);
-                            if (status != null && status.getErrorMessage() != null) {
-                                errorMsg = status.getErrorMessage();
-                            }
-                            log.error(errorMsg);
-                            context.setErrorMessage(errorMsg);
-                            buildResultDir = generatedCodeDir;
-                        }
+                        vueBuilder.resetBuildStatus(generatedCodeDir);
+                        BuildTaskProducer producer = SpringContextUtil.getBean(BuildTaskProducer.class);
+                        BuildTask task = BuildTask.builder()
+                                .appId(context.getAppId())
+                                .workingDir(generatedCodeDir)
+                                .generatedCodeDir(generatedCodeDir)
+                                .build();
+                        producer.sendBuildTask(task);
+                        log.info("已发送异步构建任务: appId={}, workingDir={}", context.getAppId(), generatedCodeDir);
+                        buildResultDir = generatedCodeDir;
                     }
                 } catch (Exception e) {
-                    log.error("Vue 项目构建异常: {}", e.getMessage(), e);
-                    context.setErrorMessage("构建异常: " + e.getMessage());
+                    log.error("发送构建任务异常: {}", e.getMessage(), e);
+                    context.setErrorMessage("发送构建任务异常: " + e.getMessage());
                     buildResultDir = generatedCodeDir;
                 }
             } else {

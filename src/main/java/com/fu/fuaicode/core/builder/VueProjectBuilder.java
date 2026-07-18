@@ -48,6 +48,10 @@ public class VueProjectBuilder {
         return buildStatusMap.get(workingDir);
     }
 
+    public void resetBuildStatus(String workingDir) {
+        buildStatusMap.remove(workingDir);
+    }
+
     /**
      * 执行命令
      *
@@ -194,6 +198,12 @@ public class VueProjectBuilder {
         }
         log.info("开始构建Vue项目: {}", workingDir);
 
+        File distDir = new File(projectDir, "dist");
+        if (distDir.exists()) {
+            deleteDirectory(distDir);
+            log.info("已删除旧的 dist 目录: {}", distDir.getAbsolutePath());
+        }
+
         File nodeModulesDir = new File(projectDir, "node_modules");
         if (nodeModulesDir.exists() && nodeModulesDir.isDirectory()) {
             log.info("检测到已存在 node_modules，跳过 npm install: {}", nodeModulesDir.getAbsolutePath());
@@ -215,7 +225,6 @@ public class VueProjectBuilder {
             return false;
         }
 
-        File distDir = new File(projectDir, "dist");
         if (!distDir.exists()||!distDir.isDirectory()) {
             String errorMsg = "dist目录不存在: " + distDir.getAbsolutePath();
             log.error(errorMsg);
@@ -238,6 +247,23 @@ public class VueProjectBuilder {
                 status.setEndTime(System.currentTimeMillis());
             }
         }
+    }
+
+    private void deleteDirectory(File directory) {
+        if (!directory.exists()) {
+            return;
+        }
+        File[] files = directory.listFiles();
+        if (files != null) {
+            for (File file : files) {
+                if (file.isDirectory()) {
+                    deleteDirectory(file);
+                } else {
+                    file.delete();
+                }
+            }
+        }
+        directory.delete();
     }
 
     /**

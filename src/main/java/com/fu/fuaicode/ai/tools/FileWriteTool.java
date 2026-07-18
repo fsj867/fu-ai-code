@@ -26,18 +26,19 @@ public class FileWriteTool {
         log.info("写入文件到指定路径: {}，内容: {}", relativePath, content);
         try {
             Path path = Paths.get(relativePath);
-            if (!path.isAbsolute()){
-                // 相对路径处理成绝对路径
+            if (!path.isAbsolute()) {
                 String project_Name = "vue_project_" + appId;
                 Path project_Path= Paths.get(AppConstant.CODE_OUTPUT_ROOT_DIR, project_Name);
-                path = project_Path.resolve(relativePath); // 相对路径处理成绝对路径
+                if (!Files.exists(project_Path)) {
+                    Files.createDirectories(project_Path);
+                    log.info("创建项目目录: {}", project_Path);
+                }
+                path = project_Path.resolve(relativePath);
             }
-            //父目录不存在创建
             Path parent = path.getParent();
-            if (parent != null && !Files.exists(parent)){
+            if (parent != null && !Files.exists(parent)) {
                 Files.createDirectories(parent);
             }
-            //写入文件
             Files.writeString(path, content,
                     StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
             return "文件写入成功："+relativePath;

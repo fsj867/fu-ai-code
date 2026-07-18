@@ -734,6 +734,7 @@ onMounted(() => {
 .action-btn {
   width: 100%;
   justify-content: flex-start;
+  align-items: center;
   padding-left: 12px;
   height: 38px;
   border-radius: 8px;
@@ -1231,4 +1232,20 @@ onMounted(() => {
   height: 60vh;
   border: none;
 }
+/* 修复侧边按钮图标宽度不一、文字不对齐 */
+.sidebar-actions .action-btn {
+  width: 100%;
+  justify-content: flex-start;
+  padding-left: 16px;
+  margin: 6px 0;
+}
+/* 统一所有图标占位宽度，强制文字左对齐平齐 */
+.sidebar-actions .action-btn :deep(.el-button__icon) {
+  width: 22px;
+  display: inline-flex;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-right: 8px;
+}
+
 </style>

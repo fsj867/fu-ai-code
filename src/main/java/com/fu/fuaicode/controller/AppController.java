@@ -242,7 +242,7 @@ public class AppController {
     * @return 生成结果流
     */
 
-    @RateLimit(limitType = RateLimitType.USER,rate = 5,rateInterval = 60)
+    @RateLimit(limitType = RateLimitType.USER,rate = 5,rateInterval = 60) // 5次/分钟
     @GetMapping(value = "/chat/gen/code", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<ServerSentEvent<String>> chatToGenCode(@RequestParam Long appId,
                                                        @RequestParam String message,
