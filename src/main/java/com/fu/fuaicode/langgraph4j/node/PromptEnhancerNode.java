@@ -4,6 +4,7 @@ import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.util.StrUtil;
 import com.fu.fuaicode.langgraph4j.state.ImageResource;
 import com.fu.fuaicode.langgraph4j.state.WorkflowContext;
+import com.fu.fuaicode.langgraph4j.state.WorkflowEvent;
 import lombok.extern.slf4j.Slf4j;
 import org.bsc.langgraph4j.action.AsyncNodeAction;
 import org.bsc.langgraph4j.prebuilt.MessagesState;
@@ -20,7 +21,10 @@ public class PromptEnhancerNode {
             WorkflowContext context = WorkflowContext.getContext(state);
             log.info("执行节点: 提示词增强");
 
-
+            WorkflowEvent startEvent = new WorkflowEvent();
+            startEvent.setEventType(WorkflowEvent.TYPE_STEP);
+            startEvent.setStepName("提示词优化");
+            context.emitEvent(startEvent);
 
             String originalPrompt = context.getOriginalPrompt();
             String imageListStr = context.getImageListStr();

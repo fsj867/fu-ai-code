@@ -3,6 +3,7 @@ package com.fu.fuaicode.langgraph4j.node;
 import com.fu.fuaicode.ai.AiCodeGenTypeRoutingService;
 import com.fu.fuaicode.langgraph4j.SpringContextUtil;
 import com.fu.fuaicode.langgraph4j.state.WorkflowContext;
+import com.fu.fuaicode.langgraph4j.state.WorkflowEvent;
 
 import com.fu.fuaicode.model.enums.CodeGenTypeEnum;
 import lombok.extern.slf4j.Slf4j;
@@ -18,6 +19,12 @@ public class RouterNode {
         return node_async(state -> {
             WorkflowContext context = WorkflowContext.getContext(state);
             log.info("执行节点: 智能路由");
+
+            WorkflowEvent startEvent = new WorkflowEvent();
+            startEvent.setEventType(WorkflowEvent.TYPE_STEP);
+            startEvent.setStepName("智能路由");
+            context.emitEvent(startEvent);
+
             CodeGenTypeEnum generationType = context.getGenerationType();
             if (generationType != null) {
                 log.info("已指定生成类型: {}，跳过 AI 路由", generationType.getValue());

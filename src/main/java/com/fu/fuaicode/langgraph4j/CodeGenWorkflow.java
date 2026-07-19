@@ -92,14 +92,8 @@ public class CodeGenWorkflow {
         log.info("最终状态: {}", finalState);
         return finalState;
     }
-    private static final Map<String, String> STEP_NAME_MAP = Map.of(
-            "image_collector", "图片收集",
-            "prompt_enhancer", "提示词优化",
-            "router", "智能路由",
-            "code_generator", "代码生成",
-            "code_quality_check", "代码质检",
-            "project_builder", "项目构建"
-    );
+
+    private static final long SSE_TIMEOUT_MS = 600000L;
 
     // 执行图，流式输出（SseEmitter 方式，Spring MVC 原生支持，最稳定）
     public SseEmitter executeSse(String prompt, Long appId, User loginUser) {
@@ -113,36 +107,50 @@ public class CodeGenWorkflow {
 
         CompiledGraph<MessagesState<String>> graph = createGraph();
 
+        SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
+
+        SseEmitterAdapter emitterAdapter = new SseEmitterAdapter(emitter);
+
         WorkflowContext inintialState = WorkflowContext.builder()
                 .currentStep("初始化")
                 .originalPrompt(prompt)
                 .appId(appId)
                 .generationType(appGenType)
+                .eventSink(emitterAdapter)
                 .build();
         GraphRepresentation graphRepresentation = graph.getGraph(GraphRepresentation.Type.MERMAID);
         log.info("图结构：{}", graphRepresentation.content());
 
-        SseEmitter emitter = new SseEmitter(0L); // 0 = 永不超时
+        emitter.onCompletion(() -> {
+            log.info("SSE 连接正常关闭");
+            WorkflowContext.clearEventSinkHolder();
+        });
+
+        emitter.onTimeout(() -> {
+            log.warn("SSE 连接超时");
+            WorkflowEvent timeoutEvent = new WorkflowEvent();
+            timeoutEvent.setEventType(WorkflowEvent.TYPE_ERROR);
+            timeoutEvent.setContent("连接超时");
+            emitterAdapter.tryEmitNext(timeoutEvent);
+            WorkflowContext.clearEventSinkHolder();
+        });
+
+        emitter.onError(e -> {
+            log.error("SSE 连接异常", e);
+            WorkflowContext.clearEventSinkHolder();
+        });
 
         Thread.startVirtualThread(() -> {
             try {
-                WorkflowContext.setEventSinkHolder(new SseEmitterAdapter(emitter));
+                WorkflowContext.setEventSinkHolder(emitterAdapter);
                 int currentStep = 1;
-                int eventCount = 0;
                 for (NodeOutput<MessagesState<String>> step : graph.stream(
                         Map.of(WorkflowContext.WORKFLOW_CONTEXT_KEY, inintialState))) {
                     String nodeName = step.node();
                     if (nodeName.startsWith("__") && nodeName.endsWith("__")) {
                         continue;
                     }
-                    log.info("第 {} 步: {}", currentStep, nodeName);
-                    String displayStepName = STEP_NAME_MAP.getOrDefault(nodeName, nodeName);
-                    WorkflowEvent event = new WorkflowEvent();
-                    event.setEventType(WorkflowEvent.TYPE_STEP);
-                    event.setStepName(displayStepName);
-                    sendSseEvent(emitter, event);
-                    eventCount++;
-                    log.info("发射 step 事件[{}]: {}", eventCount, displayStepName);
+                    log.info("第 {} 步完成: {}", currentStep, nodeName);
                     currentStep++;
                 }
                 log.info("工作流执行完成，发射完成事件");
@@ -150,7 +158,7 @@ public class CodeGenWorkflow {
                 completeEvent.setEventType(WorkflowEvent.TYPE_COMPLETE);
                 sendSseEvent(emitter, completeEvent);
                 emitter.complete();
-                log.info("事件流发射完毕，共发射 {} 个 step 事件", eventCount);
+                log.info("事件流发射完毕");
             } catch (Exception e) {
                 log.error("工作流执行异常", e);
                 WorkflowEvent errorEvent = new WorkflowEvent();
@@ -199,7 +207,7 @@ public class CodeGenWorkflow {
                     String jsonStr = cn.hutool.json.JSONUtil.toJsonStr(data);
                     emitter.send(SseEmitter.event().data(jsonStr));
                 } catch (Exception e) {
-                    // 静默忽略发送错误
+                    log.warn("发送 SSE 事件失败", e);
                 }
             }
         }

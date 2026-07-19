@@ -3,6 +3,7 @@ package com.fu.fuaicode.langgraph4j.node;
 import com.fu.fuaicode.langgraph4j.SpringContextUtil;
 import com.fu.fuaicode.langgraph4j.state.ImageResource;
 import com.fu.fuaicode.langgraph4j.state.WorkflowContext;
+import com.fu.fuaicode.langgraph4j.state.WorkflowEvent;
 import com.fu.fuaicode.model.enums.ImageCategoryEnum;
 import lombok.extern.slf4j.Slf4j;
 import org.bsc.langgraph4j.action.AsyncNodeAction;
@@ -19,6 +20,11 @@ public class ImageCollectorNode {
         return node_async(state -> {
             WorkflowContext context = WorkflowContext.getContext(state);
             log.info("执行节点: 图片收集");
+
+            WorkflowEvent startEvent = new WorkflowEvent();
+            startEvent.setEventType(WorkflowEvent.TYPE_STEP);
+            startEvent.setStepName("图片收集");
+            context.emitEvent(startEvent);
 
             String originalPrompt = context.getOriginalPrompt();
             String imageStr = "";

@@ -303,7 +303,7 @@ public class AppController {
             return emitter;
         } catch (Exception e) {
             log.error("启动事件流生成失败", e);
-            SseEmitter emitter = new SseEmitter();
+            SseEmitter emitter = new SseEmitter(600000L);
             try {
                 WorkflowEvent errorEvent = new WorkflowEvent();
                 errorEvent.setEventType(WorkflowEvent.TYPE_ERROR);
@@ -325,7 +325,7 @@ public class AppController {
     @GetMapping(value = "/chat/event/test", produces = "text/event-stream;charset=UTF-8")
     public SseEmitter testSse() {
         log.info("测试 SSE 端点被调用");
-        SseEmitter emitter = new SseEmitter(0L);
+        SseEmitter emitter = new SseEmitter(600000L);
         Thread.startVirtualThread(() -> {
             try {
                 for (int i = 1; i <= 3; i++) {

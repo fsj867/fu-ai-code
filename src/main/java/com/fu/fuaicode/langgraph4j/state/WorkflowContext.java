@@ -99,7 +99,7 @@ public class WorkflowContext implements Serializable {
     private transient Object eventSink;
 
     /**
-     * ThreadLocal 方式传递事件发射器，避免状态序列化导致引用丢失
+     * ThreadLocal 方式传递事件发射器，作为备用方案
      */
     private static final ThreadLocal<Object> EVENT_SINK_HOLDER = new ThreadLocal<>();
 
@@ -113,6 +113,24 @@ public class WorkflowContext implements Serializable {
 
     public static void clearEventSinkHolder() {
         EVENT_SINK_HOLDER.remove();
+    }
+
+    /**
+     * 通过 eventSink 发射事件
+     */
+    public void emitEvent(WorkflowEvent event) {
+        Object sink = this.eventSink;
+        if (sink == null) {
+            sink = EVENT_SINK_HOLDER.get();
+        }
+        if (sink != null) {
+            try {
+                java.lang.reflect.Method method = sink.getClass().getMethod("tryEmitNext", WorkflowEvent.class);
+                method.invoke(sink, event);
+            } catch (Exception e) {
+                // 静默忽略
+            }
+        }
     }
 
 

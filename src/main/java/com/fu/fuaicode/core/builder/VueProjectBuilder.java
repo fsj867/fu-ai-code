@@ -19,11 +19,11 @@ import java.util.concurrent.TimeUnit;
 @Component
 public class VueProjectBuilder {
 
-    private static final int DEFAULT_TIMEOUT_SECONDS = 600;
+    private static final int DEFAULT_TIMEOUT_SECONDS = 600; // 默认超时时间（秒）
 
-    private static final String NPM_REGISTRY = "https://registry.npmmirror.com";
+    private static final String NPM_REGISTRY = "https://registry.npmmirror.com"; // NPM 镜像
 
-    private final Map<String, BuildStatus> buildStatusMap = new ConcurrentHashMap<>();
+    private final Map<String, BuildStatus> buildStatusMap = new ConcurrentHashMap<>(); // 构建状态缓射
 
     @Data
     @AllArgsConstructor

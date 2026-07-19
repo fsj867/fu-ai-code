@@ -3,6 +3,7 @@ package com.fu.fuaicode.langgraph4j.node;
 import com.fu.fuaicode.core.builder.VueProjectBuilder;
 import com.fu.fuaicode.langgraph4j.SpringContextUtil;
 import com.fu.fuaicode.langgraph4j.state.WorkflowContext;
+import com.fu.fuaicode.langgraph4j.state.WorkflowEvent;
 import com.fu.fuaicode.mq.BuildTask;
 import com.fu.fuaicode.mq.BuildTaskProducer;
 import com.fu.fuaicode.model.enums.CodeGenTypeEnum;
@@ -21,6 +22,11 @@ public class ProjectBuilderNode {
         return node_async(state -> {
             WorkflowContext context = WorkflowContext.getContext(state);
             log.info("执行节点: 项目构建");
+
+            WorkflowEvent startEvent = new WorkflowEvent();
+            startEvent.setEventType(WorkflowEvent.TYPE_STEP);
+            startEvent.setStepName("项目构建");
+            context.emitEvent(startEvent);
 
             String generatedCodeDir = context.getGeneratedCodeDir();
             CodeGenTypeEnum generationType = context.getGenerationType();

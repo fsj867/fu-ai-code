@@ -5,6 +5,7 @@ import cn.hutool.core.util.StrUtil;
 import com.fu.fuaicode.ai.CodeQualityCheckService;
 import com.fu.fuaicode.langgraph4j.SpringContextUtil;
 import com.fu.fuaicode.langgraph4j.state.WorkflowContext;
+import com.fu.fuaicode.langgraph4j.state.WorkflowEvent;
 import com.fu.fuaicode.model.QualityResult;
 import lombok.extern.slf4j.Slf4j;
 import org.bsc.langgraph4j.action.AsyncNodeAction;
@@ -26,6 +27,12 @@ public class CodeQualityCheckNode {
         return node_async(state -> {
             WorkflowContext context = WorkflowContext.getContext(state);
             log.info("执行节点: 代码质量检查");
+
+            WorkflowEvent startEvent = new WorkflowEvent();
+            startEvent.setEventType(WorkflowEvent.TYPE_STEP);
+            startEvent.setStepName("代码质检");
+            context.emitEvent(startEvent);
+
             String generatedCodeDir = context.getGeneratedCodeDir();
             QualityResult qualityResult;
             try {
